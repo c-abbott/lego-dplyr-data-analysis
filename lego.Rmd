@@ -1,0 +1,558 @@
+---
+title: "Untidy data"
+author:
+- Callum Abbott
+- Georgia Zhao
+- Panagiotis Maouris
+- Xihang Li
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Setup - Load packages
+
+```{r setup, include = FALSE}
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(rvest)
+library(lubridate)
+library(ggplot2)
+```
+
+## Task 1 - Lego Sales Data
+
+```{r message = FALSE}
+sales = readRDS("data/lego_sales.rds")
+```
+
+### Part 1 - Tidying the data
+
+
+#### Write up
+
+The lego sales dataset has been tidied with the convention that each row represents
+the purchases of a single person of a particular lego set. This means that the same 
+purchaser is able to occupy multiple rows in our data set if they buy more than 
+one lego set with different `Theme`s. Note however that we have chosen to preserve
+the `Quantity` variable since we believe this is a tidier representation of the data, 
+and hence, if multiple purchases are made but they are of the same `Theme` of lego set, this person
+will only occupy a single row with `Quantity` > 1. A further justification for this
+decision is that the `Quantity` variable  is still easily accessible, and hence, 
+easy to work with (see Q2). 
+
+Note that we have also chosen to give the hobbies variable 3 distinct columns. 
+This is because we believe that the elements of a tidy dataframe should not
+be subscriptable i.e. matrices, vectors, lists, etc. 
+
+#### Code
+
+```{r task1_tidy}
+# --------------------- #
+# TASK: Tidy the data.  #
+# --------------------- #
+
+lego_sales_tbl = tibble(lego_sales = sales) %>%
+  # Unnesting list of lists to row column structure
+  unnest_wider(lego_sales) %>%
+  unnest_longer(purchases) %>%
+  unnest_wider(purchases) %>%
+# Creating distinct columns for the hobbies
+unnest_wider(hobbies, names_sep = "_") 
+```
+
+```{r task1_top}
+# Print out the first 10 lines of your tidy data frame below 
+print(head(lego_sales_tbl, n = 10L))
+```
+
+### Part 2 - Questions
+
+#### Question 1
+
+```{r task1_q1}
+# --------------------------------------------------------------- #
+# TASK: What are the three most common first names of purchasers? #
+# --------------------------------------------------------------- #
+
+common_buyers_df = lego_sales_tbl %>%
+  # Getting distinct purchasers
+  distinct(first_name, last_name, phone_number) %>%
+  # Counting occurrences of first names
+  count(first_name, name = 'name_freq') %>%
+  arrange(desc(name_freq)) %>%
+  # Getting top 3 purchasers (accounting for ties)
+  slice_max(name_freq, n = 3)
+
+cat("The three most common first names of purchasers :",
+    as.character(unlist(common_buyers_df[1])),sep = "\n")
+```
+
+#### Question 2
+
+```{r task1_q2}
+# --------------------------------------------------------- #
+# TASK: Which Lego theme has made the most money for Lego?  #
+# --------------------------------------------------------- #
+
+themes_df = lego_sales_tbl %>%
+  group_by(Theme) %>%
+  # Creating new summary column with total money spent for each theme
+  summarise(total_USPrice = sum(USPrice * Quantity), .groups = "drop") %>%
+  arrange(desc(total_USPrice)) %>%
+  # Grabbing theme which has made the most money for Lego (accounting for ties)
+  slice_max(total_USPrice, n = 1)
+
+cat("The theme has made the most money for lego is:",
+    as.character(unlist(themes_df[1])))
+```
+
+
+#### Question 3
+
+```{r task1_q3}
+# ----------------------------------------------------------------- #
+# TASK: Do men or women buy more Lego sets (per person) on average? #
+# ----------------------------------------------------------------- #
+
+female_df = lego_sales_tbl %>%
+  filter(gender == "Female")
+# Getting total number of sets bought by female purchasers
+total_FemaleLegoSets = sum(female_df$Quantity)
+# and the total number of female purchasers
+total_Female = nrow(distinct(female_df, first_name))
+
+# Repeating for males
+male_df = lego_sales_tbl %>%
+  filter(gender == "Male")
+total_MaleLegoSets = sum(male_df$Quantity)
+total_Male = nrow(distinct(male_df, first_name))
+
+# Comparing whether men or woman purchase more Lego sets on average
+if ((total_FemaleLegoSets / total_Female) < (total_MaleLegoSets / total_Male)) {
+  print("Men buy more Lego sets (per person) on average")
+} else if ((total_FemaleLegoSets / total_Female) == (total_MaleLegoSets / total_Male)) {
+  print("Men and Women buy equivalent Lego sets (per person) on average.")
+} else {
+  print("Women buy more Lego sets on average.")
+}
+```
+
+#### Question 4
+
+```{r task1_q4}
+# ---------------------------------------------------------------- #
+# TASK: What are the five most popular hobbies of Lego purchasers? #
+# ---------------------------------------------------------------- #
+
+hobbies_tbl = tibble(lego_sales = sales) %>%
+  # Getting distinct purchasers and hobbies
+  unnest_wider(lego_sales) %>%
+  distinct(first_name, last_name, phone_number, hobbies) %>%
+  select(hobbies) %>%
+  # Placing hobbies into distinct rows 
+  unnest_longer(hobbies) %>%
+  # Removing NA chr values
+  filter(!hobbies == "NA") %>%
+  count(hobbies, name = 'Freq') %>%
+  arrange(desc(Freq)) %>%
+  # Grabbing top 5 most popular hobbies (accounting for ties)
+  slice_max(Freq, n = 5)
+
+cat("The five most popular hobbies of Lego purchasers are:",
+    as.character(unlist(hobbies_tbl[1])), sep = "\n")
+```
+
+#### Question 5
+
+```{r task1_q5}
+# ---------------------------------------------------------- #
+# TASK: Which area code has spent the most money on Legos?   #
+# ---------------------------------------------------------- #
+
+areacode_tbl = lego_sales_tbl %>%
+  # Selecting relevant variables
+  select(phone_number, USPrice, Quantity)%>%
+  # Removing NAs from phone_number
+  filter(!is.na(phone_number))%>%
+  separate(
+    col = phone_number,
+    # Separating 9 digit phone number into 3-3-3 
+    into = c("First3Digits", "Mid3Digits", "Last4Digits"),
+    sep = "-"
+  )%>%
+  # Grouping by area code
+  group_by(First3Digits) %>%
+  # Calculating money spent by area code
+  summarise(total_money = sum(USPrice * Quantity), .groups = "drop")%>%
+  arrange(desc(total_money)) %>%
+  # Getting top spending area code (accounting for ties)
+  slice_max(total_money, n = 1)
+
+cat("The area code has spent the most money on Legos:",
+    as.character(unlist(areacode_tbl[1])))
+```
+
+
+
+## Task 2 - GitHub and dplyr
+
+```{r message = FALSE}
+commits = readRDS("data/dplyr_commits.rds")
+```
+
+### Part 1 - Structure of a commit
+
+The commits object is a list of length 474 where each element contains another
+list of length 11. Each of these element lists represent the data that is collected 
+for each commit made to the dplyr package on GitHub.
+
+Examining the list containing the data on a single commit, we observe the data
+to be stored in a hierarchical tree structure. The root level of this tree structure
+contains information for identifying and finding the commit on GitHub such as
+`sha`, `node_id`, `url`, `html_url` and `comments_url`.
+
+In addition to the data listed above, there are additional lists at the root level
+of this tree containing meta-data about the commit. These lists include `commit`,
+`author`, `committer`, `parents`, `stats` and `files` where the lengths of these
+lists range from 1 to 18. Firstly, the `author` and `committer` lists provide 
+general information about the author's and commiter's GitHub profile (who are 
+usually the same person). The `stats` list contains information on the number of 
+lines of code that have been added and deleted across all files that have been 
+included in the commit. Meanwhile, the `files` list details the breakdown of the 
+changes made to each individual file included in the commit, as well as each 
+file's identifying information. The `parents` list contains information on the
+commit history of the repository, including which commit is descended from which. 
+This will not be useful for our task. Finally, the `commit` list amalgamates some
+of the most useful data from the entire commit into a single list with information 
+such as the author, committer and commit's identifying information.
+
+### Part 2 - Tidying the data
+
+#### Write up
+
+From the commits object we decided that each row should represent a unique file 
+that was modified in a single commit. This led us to extract the following
+information to act as columns in our tidy dataset: `sha` - to uniquely identify a 
+single commit; `id` - to aid in uniquely identifying authors who have characters
+outside the English alphabet in their names; `author_name` - for mapping ids to 
+people's names; `date` - to help summarize the general pattern for development of 
+dplyr and aid in visualizing the relationship between the commit history and dplyr release
+dates on CRAN; and finally `filename` -  to uniquely identify the file changed 
+in a single commit.
+
+We believe that the variables listed above are all the information we need
+to answer the following 5 questions. Creating more variables and adding more 
+data to our tidy dataframe would be simply polluting the data.
+
+#### Code
+
+```{r task2_tidy}
+# --------------------- #
+# TASK: Tidy the data.  #
+# --------------------- #
+
+commits_tbl = tibble(dplyr_commits = commits) %>%
+  # Extracting relevant information
+  hoist(
+    dplyr_commits,
+    sha = c("sha"),
+    author_name = c("commit", "author", "name"),
+    id = c("author", "id"),
+    date = c("commit", "author", "date"),
+    files = c("files")
+) %>%  select(-dplyr_commits) %>% # Dropping unnecessary info
+  # Making single row represent a single file and the commit it was changed in
+  unnest_longer(files) %>%
+  # Getting file names
+  hoist(
+    files,
+    filename = c("filename")
+  ) %>% select(-files) # Dropping unnecessary info
+```
+
+
+```{r task2_top}
+# Print out the first 10 lines of your tidy data frame below -->
+print(head(commits_tbl, n = 10L))
+```
+
+
+### Part 3 - Questions
+
+
+#### Question 1
+
+```{r task2_q1}
+# ---------------------------------------------------------------------- #
+# TASK: Who are the top five contributors (in terms of the most commits) #
+# to dplyr in 2020?                                                      #
+# ---------------------------------------------------------------------- #
+
+# Some authors use different names while they have the same id. Consequently, 
+# the commits of each contributor were counted based on their IDs and not their names.
+
+ID_tbl = commits_tbl %>%
+  # Getting distinct commit of each contributor 
+  distinct(id, sha) %>%
+  # Count the contributions of each author and their ids.
+  count(id, name = 'NumberCommits') %>%
+  arrange(desc(NumberCommits)) %>%
+  # Fetching the ids of the top 5 contributors to dplyr (accounting for ties)
+  slice_max(NumberCommits, n = 5)
+
+# Creating a tibble to match authors with IDs
+author = commits_tbl %>%
+select(name = author_name, ID = id) %>%
+distinct(name, ID)
+
+# Fetching the names of the top 5 contributors to dyplyr
+topconts = c()
+for (i in seq_along(ID_tbl$id)){
+topconts[i] = author$name[author$ID == ID_tbl$id[i]][1]
+}
+
+cat("The top five contributors (in terms of the most commits) are: \n",
+    paste(shQuote(topconts), collapse= ", "))
+```
+
+#### Question 2
+
+
+```{r task2_q2}
+# -------------------------------------------------------------------------- #
+# TASK: Who is the top contributor who is not a current employee of RStudio? #
+# -------------------------------------------------------------------------- #
+
+# Web scraper function to collect names of RStudio team members from 
+# RStudio website
+get_rstudioteam = function(url) {
+  # Reading relevant website
+  web_stuff = read_html(url)
+  # Extracting staff names
+  r_ppl = web_stuff %>%
+    html_nodes(".teammember .name") %>%
+    html_text()
+  r_ppl_df = data.frame(r_ppl)
+  
+  # Removing '\n' from data collected from html code
+  name = r_ppl_df$r_ppl
+  name = gsub('\n','', name)
+  return(data.frame(name))
+}
+rstudioteam = get_rstudioteam(url = "https://rstudio.com/about/")
+
+# Tibble of names and IDs of RStudio employees
+rstudioppl = commits_tbl %>%
+  select(author_name, id) %>%
+  distinct(author_name, id) %>%
+  filter(author_name %in% rstudioteam$name)
+
+# Tibble of contributors not employed by RStudio
+notRcommitID_tbl = commits_tbl %>%
+  distinct(id, sha) %>%
+  count(id, name = 'NumberCommits') %>%
+  arrange(desc(NumberCommits)) %>%
+  # Excluding contributors who are Rstudio employees
+  filter(!(id %in% rstudioppl$id)) %>%
+  # Fetching top contributorID who is not a current employee
+  slice_max(NumberCommits, n = 1) 
+
+# Some authors used two different names that were not on the Rstudio Team List. 
+# As a result, it was preferable to use their IDs instead of their names.
+# (eg Romain Francois and Romain François)
+topnotRcom = commits_tbl %>%
+  select(author_name, id) %>%
+  distinct() %>%
+  filter(id == notRcommitID_tbl$id) %>%
+  select(author_name)
+
+cat("The top contributor who is not a current employee of RStudio is ",paste(shQuote(topnotRcom)))
+```
+The **commit** with `sha`  **e5730a2b7c27f1857060f570426f459137f8db49** will be 
+described. The `author` of this commit is **Hadley Wickham**, Chief Scientist of
+the Rstudio Team. His commit was made on 24 June 2020. The `comment` of this commit
+was **Resolve Test failure**. In this commit 8 changes have been made, 4 additions 
+and 4 deletions. There is 1 `parent` of this commit and 2 `files` have changed 
+`"tests/testthat/test-colwise-mutate-errors.txt"` and 
+`"tests/testthat/test-colwise-mutate.R"`.\
+
+The `author` has corrected the error message of the function `mutate_all` where 
+a space was missing. Moreover, the argument `round` was replaced by the argument
+`length`.
+
+#### Question 3
+
+```{r task2_q3}
+# -------------------------------------------------------------------------- #
+# TASK: Which four files have been modified most often?                      #
+# -------------------------------------------------------------------------- #
+
+files_tbl = commits_tbl %>%
+  # Extracting relevant variable and sorting
+  select(filename) %>%
+  count(filename, name = 'commit_freq') %>%
+  arrange(desc(commit_freq)) %>%
+  # Fetching the most modified files in dplyr (accounting for ties)
+  slice_max(commit_freq, n = 4)
+
+cat("The four files that appear in the most number of commits are: \n", 
+    paste(shQuote(files_tbl$filename, type="cmd"), collapse=", "))
+```
+
+
+#### Question 4
+
+```{r task2_q4}
+# -------------------------------------------------------------------------- #
+# TASK: Describe the general pattern for development of dplyr.               #
+# -------------------------------------------------------------------------- #
+
+# For arranging dates temporally rather than alphabetically
+days_of_week = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+temporal_tbl = commits_tbl %>%
+  # Collapsing tibble to distinct commits
+  distinct(sha, date) %>%
+  # Extracting time information from data column
+  select(date) %>%
+  mutate(weekday = weekdays(as.Date(date), abbr=TRUE)) %>%
+  mutate(weekday = factor(weekday, levels = days_of_week)) %>%
+  # Extracting time from date variable
+  separate(
+    col = date,
+    into = c("date", "time"),
+    sep = "T"
+  ) %>%
+  # Extracting info by hour, minute and time
+  separate(
+    col = time,
+    into = c("hour", "minute", "second"),
+    sep = ":"
+  ) %>%
+  # Removing unnecessary information for task
+  select(-minute, -second) %>%
+  group_by(weekday, hour) %>%
+  count(hour, name = 'freq')
+
+# Plotting
+ggplot(
+  data = temporal_tbl,
+  mapping = aes(
+    x = hour,
+    y = freq,
+    group = 1,
+    color = weekday
+  )
+) + 
+geom_line() + 
+  # Creating grid that shares weekday variable
+  facet_grid(weekday ~ .) + 
+  theme_light() + 
+  labs(
+    title = 'Commits to dplyr by hour',
+    x = 'Hour of the Day',
+    y = 'Number of Commits',
+    color = 'Weekday'
+  ) +
+  scale_y_continuous(
+    limits = c(0, 23),
+    n.breaks = 3
+  )
+```
+
+If we start our analysis by making the reasonable assumption that a larger number
+of commits corresponds to more work being done on the dplyr package, we can observe
+that Monday and Wednesday seem to be the most productive days of the week
+for dplyr contributors respectively.
+
+Now taking on a more holistic view, it seems the majority of commits made
+to dplyr occur between the hours 11:00 - 17:00 across all days of the week
+which is portraying of the workflow of a typical working day. There is one exception 
+however occurring at 08:00 on Mondays. If we postulate that commits are only
+counted once those changes have been merged into the master branch, this hump
+could be explained by someone at RStudio merging in the changes made by 
+people over the weekend every Monday morning.
+
+We also note that no commits were made at 02:00 in the data provided.
+
+Finally, it is also interesting to also observe that a greater quantity of
+commits seem to be made on Sundays rather than Saturdays and moreover, that the 
+majority of commits made on Sunday seem to occur between the hours of 14:00 and
+16:00. Perhaps this could be due to employees at RStudio trying to get ahead
+of the work week or maybe the dplyr contributors love coding in R so much they 
+can't stop themselves from working!
+
+
+#### Question 5
+
+```{r task2_q5}
+# -------------------------------------------------------------------------- #
+# TASK: create a visualization exploring an interesting relationship between #
+# these releases and the commit history.                                     #
+# -------------------------------------------------------------------------- #
+
+# Getting 2020 releases of dplyr
+dplyr_archive = tribble(
+       ~ver          ,   ~release_dates    ,
+      "0.8.4"	       ,      "2020-01-31" 	 ,	 
+      "0.8.5"        ,      "2020-03-07"   , 
+      "1.0.0"	       ,      "2020-05-29" 	 ,  
+      "1.0.1"	       ,      "2020-07-31" 	 ,
+      "1.0.2"        ,      "2020-08-18"   ,
+)
+
+
+# Mutating release_dates into date variable type
+dplyr_archive = dplyr_archive %>%
+  mutate(release_dates_ymd = as.Date(release_dates)) 
+
+
+# The dates of the commits made to the dplyr on GitHub in the form Y-M-D  
+commitsdates = commits_tbl %>%
+  select(sha, date) %>%
+  distinct() %>%
+  mutate(dateYMD = as.Date(date)) %>%
+  select(dateYMD) %>% 
+  group_by(dateYMD) %>%
+  summarise(NumberCommits = n(), .groups = "drop_last") 
+
+# Plotting the number of commits for each day and the dplyr 
+# releases using dotted vertical lines.
+ggplot(
+  data = commitsdates,
+  mapping = aes(
+    x = dateYMD,
+    y = NumberCommits,
+    colour = "Number of Commits",
+    )
+  ) +
+  geom_step() +
+  geom_vline(
+    xintercept = dplyr_archive$release_dates_ymd, 
+    linetype = "dashed", 
+    colour = "blue"
+  ) + 
+  labs(
+    title="Commit history and dplyr releases",
+    subtitle = "dyplr releases are represented by blue dashed lines",
+    color="Labels",
+    x = "Months 2020"
+  )
+```
+
+
+The graph shows information about the history of commits and the
+dates of the 5 dplyr releases in 2020. What comes out from the
+graph is that in the period just before the dplyr releases in
+2020, the number of commits increased significantly. In addition,
+another interesting point is that in the period just after the
+dplyr releases the amount of commits went down considerably.
+Finally, it is also interesting to notice that a significant number of commits
+occur on the day of the package release! This indicates that some of the 
+dplyr tests probably didn't encompass all possible edge cases which is very
+understandable.
+Overall, the authors tend to commit very often when a new dplyr
+version is going to be released.
+
